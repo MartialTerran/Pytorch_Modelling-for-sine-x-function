@@ -2,7 +2,7 @@
 """
 Created on Thu Oct 28 12:18:37 2021
 
-@author: gnarayan
+@author: aman
 """
 
 #Based on https://github.com/tensorflow/tflite-micro/blob/main/tensorflow/lite/micro/examples/hello_world/train/train_hello_world_model.ipynb

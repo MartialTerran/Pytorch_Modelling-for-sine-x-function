@@ -1,0 +1,218 @@
+#Modular Sine-x Model with hyperparameter dictionary-control.
+#Based on Tensorflow example published by githubusercontent Azacus1 Modelling-for-sin-wave-function Model.py
+
+Hyperparameters = {
+    'hidden_layers': [32, 32, 32],  # Example: 3 hidden layers with 32 neurons each
+    'activation': 'relu',           # Activation function for hidden layers ('relu', 'sigmoid', 'tanh', 'elu', 'leakyrelu')
+    'epochs': 500,
+    'batch_size': 64,
+    'learning_rate': 0.001,
+    }
+
+print("load libraries")
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import math
+print("done loading libraries")
+
+# Set seed for experiment reproducibility
+seed = 1
+np.random.seed(seed)
+torch.manual_seed(seed)
+
+# Number of sample datapoints
+SAMPLES = 400
+
+def generate_sine_data(samples):
+    print("# --- Synthetic Data Generation ---")
+    x_values = np.random.uniform(low=0, high=2 * math.pi, size=samples).astype(np.float32)
+    np.random.shuffle(x_values)
+    y_values = np.sin(x_values).astype(np.float32)
+    y_values += 0.01 * np.random.randn(*y_values.shape)
+    return x_values, y_values
+
+# --- Data Splitting ---
+def split_data(x_values, y_values, train_split=0.6, test_split=0.2):
+    print("# --- Train/Test Data Splitting ---")
+    train_split_index = int(train_split * SAMPLES)
+    test_split_index = int(test_split * SAMPLES) + train_split_index
+    x_train, x_test, x_validate = np.split(x_values, [train_split_index, test_split_index])
+    y_train, y_test, y_validate = np.split(y_values, [train_split_index, test_split_index])
+    assert (x_train.size + x_validate.size + x_test.size) == SAMPLES
+    return (x_train, y_train), (x_test, y_test), (x_validate, y_validate)
+
+# --- Data Conversion to Tensors ---
+def convert_to_tensors(x_train, y_train, x_test, y_test, x_validate, y_validate):
+    print("# --- Data Conversion to Tensors  ---")
+    x_train_tensor = torch.from_numpy(x_train).unsqueeze(1)
+    y_train_tensor = torch.from_numpy(y_train).unsqueeze(1)
+    x_test_tensor = torch.from_numpy(x_test).unsqueeze(1)
+    y_test_tensor = torch.from_numpy(y_test).unsqueeze(1)
+    x_validate_tensor = torch.from_numpy(x_validate).unsqueeze(1)
+    y_validate_tensor = torch.from_numpy(y_validate).unsqueeze(1)
+    return x_train_tensor, y_train_tensor, x_test_tensor, y_test_tensor, x_validate_tensor, y_validate_tensor
+
+# --- Plotting Utilities ---
+def plot_data(x_train, y_train, x_test, y_test, x_validate, y_validate):
+    print("# --- Plotting Utilities  ---")
+    plt.plot(x_train, y_train, 'b.', label="Train")
+    plt.plot(x_test, y_test, 'r.', label="Test")
+    plt.plot(x_validate, y_validate, 'y.', label="Validate")
+    plt.legend()
+    plt.show()
+
+def plot_loss(train_losses, val_losses, skip=0):
+    print("# --- Plotting train_losses, val_losses  ---")
+    epochs_range = range(1, len(train_losses) + 1)
+    plt.figure(figsize=(10, 4))
+    plt.subplot(1, 2, 1)
+    plt.plot(epochs_range[skip:], train_losses[skip:], 'g.', label='Training loss')
+    plt.plot(epochs_range[skip:], val_losses[skip:], 'b.', label='Validation loss')
+    plt.title('Training and validation loss')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.show()
+
+def plot_mae(epochs_range, train_mae, val_mae):
+    print("# --- Plotting MAE  ---")
+    plt.subplot(1, 2, 2)
+    plt.plot([epochs_range[-1]], [train_mae], 'g.', label='Training MAE')
+    plt.plot([epochs_range[-1]], [val_mae], 'b.', label='Validation MAE')
+    plt.title('Training and validation mean absolute error')
+    plt.xlabel('Epochs (only final epoch shown for MAE)')
+    plt.ylabel('MAE')
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+def plot_predictions(x_test, y_test, y_test_pred_tensor):
+    print("# --- Plotting Predictions  ---")
+    plt.clf()
+    plt.title('Comparison of predictions and actual values')
+    plt.plot(x_test, y_test, 'b.', label='Actual values')
+    plt.plot(x_test, y_test_pred_tensor.detach().numpy(), 'r.', label='PyTorch predicted')
+    plt.legend()
+    plt.show()
+
+# --- Model Definition ---
+class DynamicSineModel(nn.Module):
+    def __init__(self, config):
+        super(DynamicSineModel, self).__init__()
+        self.layers = nn.ModuleList()
+        self.config = config
+        input_dim = 1
+
+        # Build hidden layers
+        for i, num_neurons in enumerate(self.config['hidden_layers']):
+            self.layers.append(nn.Linear(input_dim, num_neurons))
+            input_dim = num_neurons  # Update input dimension for the next layer
+
+        # Output layer
+        self.layers.append(nn.Linear(input_dim, 1))
+
+        # Determine activation functions
+        self.activation_functions = []
+        for _ in range(len(self.config['hidden_layers'])):
+            activation_name = self.config.get('activation', 'relu').lower()
+            if activation_name == 'relu':
+                self.activation_functions.append(nn.ReLU())
+            elif activation_name == 'sigmoid':
+                self.activation_functions.append(nn.Sigmoid())
+            elif activation_name == 'tanh':
+                self.activation_functions.append(nn.Tanh())
+            elif activation_name == 'elu':
+              self.activation_functions.append(nn.ELU())
+            elif activation_name == 'leakyrelu':
+                self.activation_functions.append(nn.LeakyReLU())
+            else:
+                raise ValueError(f"Activation function '{activation_name}' not supported.")
+
+    def forward(self, x):
+        for i, (layer, activation) in enumerate(zip(self.layers[:-1], self.activation_functions)):
+            x = activation(layer(x))
+        x = self.layers[-1](x)  # Output layer without activation
+        return x
+
+# --- Training and Evaluation Functions ---
+def train_model(model, optimizer, loss_fn, x_train_tensor, y_train_tensor, x_validate_tensor, y_validate_tensor, config):
+    epochs = config['epochs']
+    batch_size = config['batch_size']
+    train_losses = []
+    val_losses = []
+
+    for epoch in range(1, epochs + 1):
+        model.train()
+        permutation = torch.randperm(x_train_tensor.size()[0])
+        epoch_train_loss = 0.0
+        for i in range(0, x_train_tensor.size()[0], batch_size):
+            indices = permutation[i:i + batch_size]
+            x_batch, y_batch = x_train_tensor[indices], y_train_tensor[indices]
+            optimizer.zero_grad()
+            y_pred = model(x_batch)
+            loss = loss_fn(y_pred, y_batch)
+            loss.backward()
+            optimizer.step()
+            epoch_train_loss += loss.item() * x_batch.size(0)
+        train_losses.append(epoch_train_loss / x_train_tensor.size(0))
+
+        model.eval()
+        with torch.no_grad():
+            y_val_pred = model(x_validate_tensor)
+            val_loss = loss_fn(y_val_pred, y_validate_tensor).item()
+            val_losses.append(val_loss)
+
+        if epoch % 100 == 0:
+            print(f'Epoch {epoch}/{epochs}, Training Loss: {train_losses[-1]:.4f}, Validation Loss: {val_loss:.4f}')
+    return train_losses, val_losses
+
+def evaluate_model(model, loss_fn, x_test_tensor, y_test_tensor, x_train_tensor, y_train_tensor, x_validate_tensor, y_validate_tensor):
+    model.eval()
+    with torch.no_grad():
+        y_test_pred_tensor = model(x_test_tensor)
+        test_loss = loss_fn(y_test_pred_tensor, y_test_tensor).item()
+        test_mae = torch.mean(torch.abs(y_test_pred_tensor - y_test_tensor)).item()
+        train_mae = torch.mean(torch.abs(model(x_train_tensor) - y_train_tensor)).item()
+        val_mae = torch.mean(torch.abs(model(x_validate_tensor) - y_validate_tensor)).item()
+
+    print(f'Test Loss: {test_loss:.4f}')
+    print(f'Test MAE: {test_mae:.4f}')
+    return test_loss, test_mae, train_mae, val_mae, y_test_pred_tensor
+
+# --- Main Execution ---
+def main():
+    # Hyperparameters
+    config = Hyperparameters
+
+    # Generate and split data
+    x_values, y_values = generate_sine_data(SAMPLES)
+    (x_train, y_train), (x_test, y_test), (x_validate, y_validate) = split_data(x_values, y_values)
+    plot_data(x_train, y_train, x_test, y_test, x_validate, y_validate)
+    x_train_tensor, y_train_tensor, x_test_tensor, y_test_tensor, x_validate_tensor, y_validate_tensor = convert_to_tensors(
+        x_train, y_train, x_test, y_test, x_validate, y_validate
+    )
+
+    # Model, Optimizer, and Loss Function
+    model = DynamicSineModel(config)
+    optimizer = optim.Adam(model.parameters(), lr=config['learning_rate'])
+    loss_fn = nn.MSELoss()
+
+    # Training
+    train_losses, val_losses = train_model(
+        model, optimizer, loss_fn, x_train_tensor, y_train_tensor, x_validate_tensor, y_validate_tensor, config
+    )
+    plot_loss(train_losses, val_losses)
+
+    # Evaluation
+    test_loss, test_mae, train_mae, val_mae, y_test_pred_tensor = evaluate_model(
+        model, loss_fn, x_test_tensor, y_test_tensor, x_train_tensor, y_train_tensor, x_validate_tensor, y_validate_tensor
+    )
+    plot_mae(range(1, len(train_losses) + 1), train_mae, val_mae)
+    plot_predictions(x_test, y_test, y_test_pred_tensor)
+
+if __name__ == "__main__":
+    main()
